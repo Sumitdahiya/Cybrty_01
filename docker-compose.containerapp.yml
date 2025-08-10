@@ -1,0 +1,216 @@
+version: '3.8'
+
+# Docker Compose for Container Apps development and testing
+# This mimics the Container Apps environment locally
+
+services:
+  # Main AI-Guided Penetration Testing API
+  pentest-ai:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: pentest-ai-containerapp
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URI=mongodb://admin:secure_password_123@mongodb:27017/crewai_pentest?authSource=admin
+      - OLLAMA_HOST=http://ollama-ai:11434
+      - ENVIRONMENT=development
+      - PYTHONPATH=/app
+      - API_SECRET_KEY=dev-secret-key
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./reports:/app/reports
+    depends_on:
+      - mongodb
+      - ollama-ai
+    restart: unless-stopped
+    networks:
+      - containerapp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Container Apps equivalent settings
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  # Ollama AI Service (Internal ingress equivalent)
+  ollama-ai:
+    image: ollama/ollama:latest
+    container_name: ollama-ai-containerapp
+    ports:
+      - "11434:11434"  # Exposed for development only
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+    restart: unless-stopped
+    networks:
+      - containerapp-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # Container Apps equivalent settings
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+
+  # MongoDB Database (Internal ingress equivalent)
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb-containerapp
+    ports:
+      - "27017:27017"  # Exposed for development only
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=secure_password_123
+      - MONGO_INITDB_DATABASE=crewai_pentest
+    volumes:
+      - mongo_data:/data/db
+      - ./mongodb-init:/docker-entrypoint-initdb.d
+    restart: unless-stopped
+    networks:
+      - containerapp-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Container Apps equivalent settings
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  # Reverse Proxy (Simulates Container Apps ingress)
+  nginx-ingress:
+    image: nginx:alpine
+    container_name: nginx-ingress-containerapp
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/containerapp.conf:/etc/nginx/nginx.conf
+      - ./nginx/ssl:/etc/nginx/ssl
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      - pentest-ai
+    restart: unless-stopped
+    networks:
+      - containerapp-network
+    # Container Apps ingress equivalent
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # MongoDB Express for database management (development only)
+  mongo-express:
+    image: mongo-express:latest
+    container_name: mongo-express-containerapp
+    ports:
+      - "8081:8081"
+    environment:
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=admin
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=secure_password_123
+      - ME_CONFIG_MONGODB_URL=mongodb://admin:secure_password_123@mongodb:27017/
+      - ME_CONFIG_BASICAUTH_USERNAME=admin
+      - ME_CONFIG_BASICAUTH_PASSWORD=admin
+    depends_on:
+      - mongodb
+    restart: unless-stopped
+    networks:
+      - containerapp-network
+    profiles:
+      - development
+    # Only for development - not deployed to Container Apps
+
+  # Log aggregation service (simulates Azure Monitor)
+  log-aggregator:
+    image: grafana/loki:latest
+    container_name: log-aggregator-containerapp
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/loki
+      - ./loki-config.yml:/etc/loki/local-config.yaml
+    restart: unless-stopped
+    networks:
+      - containerapp-network
+    profiles:
+      - monitoring
+
+volumes:
+  mongo_data:
+    driver: local
+  ollama_data:
+    driver: local
+  loki_data:
+    driver: local
+
+networks:
+  containerapp-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+
+# Container Apps equivalent configurations
+x-container-apps-config:
+  environment:
+    name: "pentest-env-local"
+    type: "Managed"
+  
+  scaling:
+    minReplicas: 0
+    maxReplicas: 10
+    rules:
+      - name: "http-scaling"
+        type: "http"
+        metadata:
+          concurrentRequests: "50"
+  
+  ingress:
+    external: true
+    targetPort: 8000
+    allowInsecure: false
+    traffic:
+      - weight: 100
+        latestRevision: true
+  
+  secrets:
+    - name: "mongodb-uri"
+      value: "mongodb://admin:secure_password_123@mongodb:27017/crewai_pentest?authSource=admin"
+    - name: "api-secret-key"
+      value: "dev-secret-key"
+  
+  dapr:
+    enabled: false  # Can be enabled for advanced scenarios
